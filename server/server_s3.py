@@ -1,33 +1,50 @@
 import tenseal as ts
 import pickle
-from shared.s3_utils import upload_to_s3, download_from_s3
+import torch
+from shared.s3_utils import download_from_s3
 
 BUCKET_NAME = "your-s3-bucket-name"
+CLIENTS = ["client1", "client2"]
 
-# Create encryption context
-context = ts.context(ts.SCHEME_TYPE.CKKS, poly_modulus_degree=8192, coeff_mod_bit_sizes=[60, 40, 40, 60])
-context.global_scale = 2 ** 40
-context.generate_galois_keys()
-context.make_context_public()
+def download_encrypted_updates():
+    updates = []
+    for client in CLIENTS:
+        local_file = f"{client}_update.pkl"
+        s3_key = f"clients/{client}_update.pkl"
+        download_from_s3(BUCKET_NAME, s3_key, local_file)
+        with open(local_file, "rb") as f:
+            updates.append(pickle.load(f))
+    return updates
 
-# Save and upload encryption context
-with open("encryption_context.pkl", "wb") as f:
-    f.write(context.serialize())
-upload_to_s3(BUCKET_NAME, "encryption_context.pkl", "shared/encryption_context.pkl")
+def aggregate_encrypted_weights(updates):
+    aggregated = {}
+    for key in updates[0].keys():
+        agg = updates[0][key]
+        for i in range(1, len(updates)):
+            agg += updates[i][key]
+        agg /= len(updates)
+        aggregated[key] = agg
+    return aggregated
 
-# Download encrypted client updates
-download_from_s3(BUCKET_NAME, "clients/client1_update.pkl", "client1_update.pkl")
-download_from_s3(BUCKET_NAME, "clients/client2_update.pkl", "client2_update.pkl")
+def decrypt_weights(encrypted_weights, context):
+    decrypted = {}
+    for key, enc_vec in encrypted_weights.items():
+        plain_tensor = torch.tensor(enc_vec.decrypt(), dtype=torch.float32)
+        decrypted[key] = plain_tensor
+    return decrypted
 
-# Load encrypted vectors
-with open("client1_update.pkl", "rb") as f:
-    encrypted1 = pickle.load(f)
-with open("client2_update.pkl", "rb") as f:
-    encrypted2 = pickle.load(f)
+def load_context():
+    download_from_s3(BUCKET_NAME, "shared/encryption_context.pkl", "encryption_context.pkl")
+    with open("encryption_context.pkl", "rb") as f:
+        context = ts.context_from(f.read())
+    return context
 
-# Decrypt, aggregate, print result
-vec1 = encrypted1.decrypt()
-vec2 = encrypted2.decrypt()
-aggregated = [(a + b) / 2 for a, b in zip(vec1, vec2)]
+if __name__ == "__main__":
+    context = load_context()
+    updates = download_encrypted_updates()
+    aggregated = aggregate_encrypted_weights(updates)
+    decrypted_weights = decrypt_weights(aggregated, context)
 
-print("Aggregated result:", aggregated)
+    # Use decrypted_weights to update your global model here
+    for k, v in decrypted_weights.items():
+        print(f"{k}: shape={v.shape}")
