@@ -4,6 +4,8 @@ import pickle
 import torch
 import torch.nn as nn
 from shared.s3_utils import upload_to_s3, download_from_s3
+from shared.model import MLP
+
 
 BUCKET_NAME = "your-s3-bucket-name"
 CLIENT_NAME = "client2"
@@ -29,10 +31,11 @@ def encrypt_model_weights(state_dict, context):
     return encrypted
 
 def simulate_training():
-    model = DummyModel()
+    model = MLP(input_size=10)  # Use correct input size if different
     for param in model.parameters():
         param.data += torch.randn_like(param) * 0.01
     return model.state_dict()
+
 
 if __name__ == "__main__":
     context = load_encryption_context()
